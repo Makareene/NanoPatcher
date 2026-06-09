@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<changeset>
+  <file type="sql" url="example.sql"/>
+  <file type="php" url="example.php"/>
+</changeset>
