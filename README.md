@@ -1,5 +1,7 @@
 # NanoPatcher
 
+**Version 1.1.0**
+
 NanoPatcher is a tiny XML-driven SQL and PHP patch runner.
 
 It executes SQL scripts and PHP patches in a deterministic order and tracks execution history using XML files.
@@ -12,137 +14,8 @@ The project is intentionally simple:
 - No command generation
 - No rollback system
 - No hidden magic
+- Human-readable execution history
 - Just XML, SQL, PHP and execution tracking
-
-## Requirements
-
-- PHP 8.0+
-- PDO
-- Database driver (PostgreSQL, MySQL, etc.)
-
-## Project Structure
-
-```text
-NanoPatcher/
-├── .gitignore
-├── db.php
-├── index.php
-├── NanoPatcher.php
-├── README.md
-├── changeset/
-│   ├── example_changeset.xml
-│   ├── project_changeset1.xml
-│   ├── project_changeset2.xml
-│   └── project_changeset10.xml
-├── executed/
-│   └── example_changeset.xml
-├── sql/
-│   ├── create_table.sql
-│   └── update_data.sql
-└── php/
-    ├── migrate_data.php
-    └── rebuild_cache.php
-```
-
-## Quick Start
-
-Create `db.php`:
-
-```php
-<?php
-
-return [
-  'dsn'      => 'pgsql:host=localhost;port=5432;dbname=my_database',
-  'username' => 'postgres',
-  'password' => 'password',
-  'options'  => [
-    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-  ],
-];
-```
-
-Create a changeset:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<changeset>
-  <file type="sql" url="create_table.sql"/>
-  <file type="php" url="migrate_data.php"/>
-</changeset>
-```
-
-Run NanoPatcher:
-
-```bash
-php index.php
-```
-
-## Changesets
-
-NanoPatcher automatically scans the `changeset` directory.
-
-Only files matching the pattern below are executed:
-
-```text
-*_changeset{N}.xml
-```
-
-Examples:
-
-```text
-project_changeset1.xml
-project_changeset2.xml
-project_changeset10.xml
-```
-
-Files are executed in numeric order:
-
-```text
-1
-2
-10
-```
-
-not:
-
-```text
-1
-10
-2
-```
-
-## Example File
-
-The file:
-
-```text
-example_changeset.xml
-```
-
-is intentionally ignored.
-
-It exists only as a template and documentation example.
-
-Because it has no numeric suffix, NanoPatcher never executes it.
-
-## Changeset Format
-
-Example:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<changeset>
-  <file type="sql" url="create_table.sql"/>
-  <file type="php" url="migrate_data.php"/>
-</changeset>
-```
-
-Supported types:
-
-| Type | Directory |
-|--------|--------|
-| sql | sql/ |
-| php | php/ |
 
 ## SQL Patches
 
@@ -152,36 +25,27 @@ Example:
 CREATE TABLE example (
   id BIGINT PRIMARY KEY
 );
+
+
+
+COMMENT ON TABLE example IS 'Demo table';
 ```
 
-SQL files are executed through:
+NanoPatcher executes SQL files through PDO.
+
+A single SQL file may contain multiple SQL statements.
+
+Statements are separated by **two empty lines**.
+
+Internally NanoPatcher splits SQL files using:
 
 ```php
-$pdo->exec($sql);
+preg_split('/\R\s*\R\s*\R/', trim($sql));
 ```
 
-## PHP Patches
+and executes every resulting statement separately.
 
-Example:
-
-```php
-<?php
-
-return function(PDO $pdo): void {
-  $pdo->exec("
-    INSERT INTO example (
-      id
-    )
-    VALUES (
-      1
-    )
-  ");
-};
-```
-
-PHP patches must return a callable.
-
-NanoPatcher automatically executes the callable and passes the active PDO connection.
+This allows migration files to contain multiple CREATE, ALTER, INSERT, COMMENT, FUNCTION, PROCEDURE and TRIGGER statements while keeping files readable.
 
 ## Execution Tracking
 
@@ -212,35 +76,25 @@ A file is considered executed when a matching record exists:
 
 If found, the file is skipped.
 
-## Execution Flow
+Execution history is stored in plain XML and can be inspected manually without querying the database.
 
-```text
-Scan changeset directory
-    ↓
-Sort changesets by number
-    ↓
-Load changeset XML
-    ↓
-Check executed XML
-    ↓
-Execute SQL/PHP file
-    ↓
-Save execution timestamp
-    ↓
-Continue
-```
+Path separators are normalized automatically, allowing changesets created on Windows and Linux to work identically.
 
-## Success Example
+## Showing Skipped Files
+
+By default NanoPatcher hides already executed files from the output.
 
 ```php
-Array
-(
-    [code] => SUCCESS
-    [description] => NanoPatcher completed successfully.
-)
+$patcher->run();
 ```
 
-## Skip Example
+To include skipped files:
+
+```php
+$patcher->run(true);
+```
+
+Example:
 
 ```php
 Array
@@ -252,24 +106,6 @@ Array
     [description] => Already executed.
 )
 ```
-
-## Error Example
-
-```php
-Array
-(
-    [code] => EXECUTION_ERROR
-    [type] => sql
-    [url] => broken.sql
-    [description] => SQLSTATE[42601]...
-)
-```
-
-When an error occurs:
-
-- execution stops immediately
-- the failed file is not marked as executed
-- remaining changesets are not processed
 
 ## Git Ignore
 
@@ -285,7 +121,7 @@ executed/*
 This keeps:
 
 - database credentials out of Git
-- execution history local to each project
+- execution history local to each environment
 
 while preserving the example file.
 
