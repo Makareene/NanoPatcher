@@ -317,7 +317,8 @@ class NanoPatcher {
     $file->addAttribute('url', $url);
     $file->addAttribute('at', $at);
 
-    $xml->asXML($executed_file);
+    if ($xml->asXML($executed_file) === false)
+      throw new Exception('Unable to save executed XML file: ' . basename($executed_file));
 
     return $at;
   }
