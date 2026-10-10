@@ -18,8 +18,7 @@ class NanoPatcher {
   protected ?PDO $pdo = null;
 
   public function __construct(?string $base_dir = null) {
-    $base_dir = $base_dir ?: __DIR__;
-    $this->base_dir      = rtrim(realpath($base_dir) ?: $base_dir, DIRECTORY_SEPARATOR);
+    $this->base_dir      = rtrim($base_dir ?: __DIR__, DIRECTORY_SEPARATOR);
     $this->changeset_dir = $this->base_dir . DIRECTORY_SEPARATOR . 'changeset';
     $this->executed_dir  = $this->base_dir . DIRECTORY_SEPARATOR . 'executed';
     $this->sql_dir       = $this->base_dir . DIRECTORY_SEPARATOR . 'sql';
@@ -27,15 +26,6 @@ class NanoPatcher {
   }
 
   public function run(bool $show_skipped = false): array {
-    $schema_file = $this->base_dir . DIRECTORY_SEPARATOR . 'NanoPatcher.xsd';
-
-    if (!is_file($schema_file)) {
-      return [ 'code' => 'SCHEMA_NOT_FOUND'
-              ,'description' => "Schema file was not found: {$schema_file}"
-              ,'changesets' => []
-             ];
-    }
-
     $res = [ 'code' => 'SUCCESS'
             ,'description' => 'NanoPatcher completed successfully.'
             ,'changesets' => []
@@ -131,17 +121,6 @@ class NanoPatcher {
             ,'files' => []
            ];
 
-    $changeset_xml = $this->loadXml($changeset_file);
-
-    if (!$changeset_xml['success']) {
-      return [ 'code' => 'CHANGESET_XML_INVALID'
-              ,'changeset' => $changeset_name
-              ,'description' => $changeset_xml['description']
-              ,'files' => []
-             ];
-    }
-
-    $xml = $changeset_xml['xml'];
     $executed_xml = $this->getExecutedXml($executed_file);
 
     if (!$executed_xml['success']) {
@@ -152,20 +131,32 @@ class NanoPatcher {
              ];
     }
 
-    foreach ($xml->file as $file) {
-      $type = (string)$file['type'];
-      $url = (string)$file['url'];
-      $force = in_array(trim((string)$file['force']), ['true', '1'], true);
+    $xml = @simplexml_load_file($changeset_file);
 
-      if ($force && (!is_writable($changeset_file) || !is_writable(dirname($changeset_file)))) {
-        $res['code'] = 'CHANGESET_XML_SAVE_ERROR';
-        $res['description'] = "Cannot remove force from {$changeset_name}: changeset is not writable.";
+    if ($xml === false) {
+      return [ 'code' => 'CHANGESET_XML_INVALID'
+              ,'changeset' => $changeset_name
+              ,'description' => "Invalid XML: {$changeset_name}"
+              ,'files' => []
+             ];
+    }
+
+    foreach ($xml->file as $file) {
+      $type = strtolower((string)$file['type']);
+      $url = str_replace( ['/', '\\']
+                         ,DIRECTORY_SEPARATOR
+                         ,(string)$file['url']
+                        );
+
+      if (!$type || !$url) {
+        $res['code'] = 'FILE_ITEM_INVALID';
+        $res['description'] = "Invalid file item in {$changeset_name}";
         return $res;
       }
 
       $executed_at = $this->getFileExecutedAt($executed_xml['xml'], $type, $url);
 
-      if (!$force && $executed_at !== null) {
+      if ($executed_at !== null) {
         if ($show_skipped)
           $res['files'][] = [ 'code'        => 'SKIPPED'
                              ,'type'        => $type
@@ -186,103 +177,16 @@ class NanoPatcher {
         return $res;
       }
 
-      try {
-        $executed['at'] = $this->saveExecutedFile( $executed_file
-                                                  ,$executed_xml['xml']
-                                                  ,$type
-                                                  ,$url
-                                                 );
-      } catch (Throwable $e) {
-        $executed['code'] = 'EXECUTED_XML_SAVE_ERROR';
-        $executed['description'] = $e->getMessage();
-        $res['files'][] = $executed;
-        $res['code'] = 'ERROR';
-        $res['description'] = 'Changeset stopped with an error.';
-        return $res;
-      }
-
-      if ($force) {
-        unset($file['force']);
-
-        try {
-          $this->saveXml($changeset_file, $xml);
-        } catch (Throwable $e) {
-          $executed['code'] = 'CHANGESET_XML_SAVE_ERROR';
-          $executed['description'] = $e->getMessage();
-          $res['files'][] = $executed;
-          $res['code'] = 'ERROR';
-          $res['description'] = 'Changeset stopped with an error.';
-          return $res;
-        }
-      }
+      $executed['at'] = $this->saveExecutedFile( $executed_file
+                                                ,$executed_xml['xml']
+                                                ,$type
+                                                ,$url
+                                               );
 
       $res['files'][] = $executed;
     }
 
     return $res;
-  }
-
-  protected function validateFileUrl(string $url): void {
-    if ( trim($url) === ''
-         || str_starts_with($url, '/')
-         || str_contains($url, '\\')
-         || str_contains($url, ':')
-       )
-      throw new InvalidArgumentException("File url must be a non-empty relative path using '/' only: {$url}");
-
-    $has_name = false;
-
-    foreach (explode('/', $url) as $part) {
-      if ($part === '' || $part === '.' || ($part === '..' && $has_name))
-        throw new InvalidArgumentException("Invalid file url: {$url}. Do not use './', repeated or trailing '/', or '..' after directory/file names.");
-
-      if ($part !== '..')
-        $has_name = true;
-    }
-
-    if (!$has_name)
-      throw new InvalidArgumentException("File url must end in a file name: {$url}");
-  }
-
-  protected function loadXml(string $xml_file): array {
-    $previous_errors = libxml_use_internal_errors(true);
-    libxml_clear_errors();
-
-    try {
-      $document = new DOMDocument();
-
-      if (!$document->load($xml_file, LIBXML_NONET))
-        throw new Exception('Unable to read XML.');
-
-      if (!@$document->schemaValidate($this->base_dir . DIRECTORY_SEPARATOR . 'NanoPatcher.xsd'))
-        throw new Exception('XML does not match NanoPatcher.xsd.');
-
-      $xml = simplexml_import_dom($document);
-
-      if ($xml === false)
-        throw new Exception('Unable to load validated XML.');
-
-      // XSD checks duplicate keys; PHP only rejects alternate path spellings.
-      foreach ($xml->file as $file)
-        $this->validateFileUrl((string)$file['url']);
-
-      return [ 'success' => true
-              ,'xml' => $xml
-             ];
-    } catch (Throwable $e) {
-      $errors = [];
-
-      foreach (libxml_get_errors() as $error)
-        $errors[] = 'line ' . $error->line . ': ' . trim($error->message);
-
-      return [ 'success' => false
-              ,'description' => basename($xml_file) . ': ' . $e->getMessage()
-                                . ($errors ? ' ' . implode(' ', $errors) : '')
-             ];
-    } finally {
-      libxml_clear_errors();
-      libxml_use_internal_errors($previous_errors);
-    }
   }
 
   protected function getExecutedXml(string $executed_file): array {
@@ -297,36 +201,27 @@ class NanoPatcher {
 
     if (!file_exists($executed_file)) {
       $xml = new SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><changeset/>');
-
-      try {
-        $this->saveXml($executed_file, $xml);
-      } catch (Throwable $e) {
+      
+      if ($xml->asXML($executed_file) === false) {
         return [ 'success' => false
                 ,'code' => 'EXECUTED_XML_CREATE_ERROR'
-                ,'description' => $e->getMessage()
+                ,'description' => 'Cannot create executed XML file: ' . basename($executed_file)
                ];
       }
     }
 
-    $loaded = $this->loadXml($executed_file);
+    $xml = @simplexml_load_file($executed_file);
 
-    if (!$loaded['success']) {
+    if ($xml === false) {
       return [ 'success' => false
               ,'code' => 'EXECUTED_XML_INVALID'
-              ,'description' => $loaded['description']
+              ,'description' => 'Executed XML file is invalid: ' . basename($executed_file)
              ];
     }
 
-    foreach ($loaded['xml']->file as $file) {
-      if (!isset($file['at'])) {
-        return [ 'success' => false
-                ,'code' => 'EXECUTED_XML_INVALID'
-                ,'description' => 'Executed file has no at attribute: ' . (string)$file['url']
-               ];
-      }
-    }
-
-    return $loaded;
+    return [ 'success' => true
+            ,'xml' => $xml
+           ];
   }
 
   protected function getFileExecutedAt(SimpleXMLElement $xml, string $type, string $url): ?string {
@@ -340,11 +235,9 @@ class NanoPatcher {
   }
 
   protected function executeFile(string $type, string $url): array {
-    $relative_path = str_replace('/', DIRECTORY_SEPARATOR, $url);
-
     $path = match ($type) {
-      'sql' => $this->sql_dir . DIRECTORY_SEPARATOR . $relative_path
-     ,'php' => $this->php_dir . DIRECTORY_SEPARATOR . $relative_path
+      'sql' => $this->sql_dir . DIRECTORY_SEPARATOR . $url
+     ,'php' => $this->php_dir . DIRECTORY_SEPARATOR . $url
      ,default => null
     };
 
@@ -356,7 +249,7 @@ class NanoPatcher {
              ];
     }
 
-    if (!is_file($path)) {
+    if (!file_exists($path)) {
       return [ 'code' => 'FILE_NOT_FOUND'
               ,'type' => $type
               ,'url' => $url
@@ -418,56 +311,16 @@ class NanoPatcher {
 
   protected function saveExecutedFile(string $executed_file, SimpleXMLElement $xml, string $type, string $url): string {
     $at = date('Y-m-d H:i:s');
-    $item = null;
 
-    foreach ($xml->file as $file) {
-      if ((string)$file['type'] === $type && (string)$file['url'] === $url) {
-        $item = $file;
-        break;
-      }
-    }
+    $file = $xml->addChild('file');
+    $file->addAttribute('type', $type);
+    $file->addAttribute('url', $url);
+    $file->addAttribute('at', $at);
 
-    $item ??= $xml->addChild('file');
-    $item['type'] = $type;
-    $item['url'] = $url;
-    $item['at'] = $at;
-
-    $this->saveXml($executed_file, $xml);
+    if ($xml->asXML($executed_file) === false)
+      throw new Exception('Unable to save executed XML file: ' . basename($executed_file));
 
     return $at;
-  }
-
-  protected function saveXml(string $xml_file, SimpleXMLElement $xml): void {
-    $namespace = 'http://www.w3.org/2001/XMLSchema-instance';
-    $attributes = $xml->attributes($namespace);
-
-    if (isset($attributes['noNamespaceSchemaLocation']))
-      $attributes['noNamespaceSchemaLocation'] = '../NanoPatcher.xsd';
-    else
-      $xml->addAttribute('xsi:noNamespaceSchemaLocation', '../NanoPatcher.xsd', $namespace);
-
-    $contents = $xml->asXML();
-
-    if ($contents === false)
-      throw new Exception('Unable to serialize XML file: ' . basename($xml_file));
-
-    $temporary_file = @tempnam(dirname($xml_file), '.nanopatcher-');
-
-    if ($temporary_file === false)
-      throw new Exception('Unable to create temporary XML file: ' . basename($xml_file));
-
-    try {
-      if (@file_put_contents($temporary_file, $contents, LOCK_EX) !== strlen($contents))
-        throw new Exception('Unable to write XML file: ' . basename($xml_file));
-
-      $mode = file_exists($xml_file) ? fileperms($xml_file) & 0777 : 0666 & ~umask();
-
-      if (!@chmod($temporary_file, $mode) || !@rename($temporary_file, $xml_file))
-        throw new Exception('Unable to save XML file: ' . basename($xml_file));
-    } finally {
-      if (file_exists($temporary_file))
-        unlink($temporary_file);
-    }
   }
 
 }
