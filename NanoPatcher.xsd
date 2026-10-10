@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:simpleType name="fileType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="sql"/>
+      <xs:enumeration value="php"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="fileUrl">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="executedAt">
+    <xs:restriction base="xs:string">
+      <xs:length value="19"/>
+      <xs:pattern value="[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:element name="changeset">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="file" minOccurs="0" maxOccurs="unbounded">
+          <xs:complexType>
+            <xs:attribute name="type" type="fileType" use="required"/>
+            <xs:attribute name="url" type="fileUrl" use="required"/>
+            <xs:attribute name="force" type="xs:boolean" use="optional"/>
+            <xs:attribute name="at" type="executedAt" use="optional"/>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+    </xs:complexType>
+
+    <xs:key name="fileKey">
+      <xs:selector xpath="file"/>
+      <xs:field xpath="@type"/>
+      <xs:field xpath="@url"/>
+    </xs:key>
+  </xs:element>
+</xs:schema>
