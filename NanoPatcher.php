@@ -21,7 +21,6 @@ class NanoPatcher {
   public function __construct(?string $base_dir = null) {
     $base_dir = $base_dir ?: __DIR__;
     $this->base_dir      = rtrim(realpath($base_dir) ?: $base_dir, DIRECTORY_SEPARATOR);
-    $this->schema_file   = $this->base_dir . DIRECTORY_SEPARATOR . 'NanoPatcher.xsd';
     $this->changeset_dir = $this->base_dir . DIRECTORY_SEPARATOR . 'changeset';
     $this->executed_dir  = $this->base_dir . DIRECTORY_SEPARATOR . 'executed';
     $this->sql_dir       = $this->base_dir . DIRECTORY_SEPARATOR . 'sql';
@@ -29,13 +28,6 @@ class NanoPatcher {
   }
 
   public function run(bool $show_skipped = false): array {
-    if (!is_file($this->schema_file)) {
-      return [ 'code' => 'SCHEMA_NOT_FOUND'
-              ,'description' => "Schema file was not found: {$this->schema_file}"
-              ,'changesets' => []
-             ];
-    }
-
     $res = [ 'code' => 'SUCCESS'
             ,'description' => 'NanoPatcher completed successfully.'
             ,'changesets' => []
@@ -142,7 +134,7 @@ class NanoPatcher {
     }
 
     $xml = $changeset_xml['xml'];
-    $executed_xml = $this->getExecutedXml($executed_file);
+    $executed_xml = $this->getExecutedXml($executed_file, $xml);
 
     if (!$executed_xml['success']) {
       return [ 'code' => $executed_xml['code']
@@ -258,7 +250,17 @@ class NanoPatcher {
       throw new InvalidArgumentException("File url must end in a file name: {$url}");
   }
 
-  protected function loadXml(string $xml_file): array {
+  protected function isAbsolutePath(string $path): bool {
+    if ($path === '')
+      return false;
+
+    if ($path[0] === '/' || $path[0] === '\\')
+      return true;
+
+    return (bool)preg_match('/^[a-zA-Z]:[\/\\\\]/', $path);
+  }
+
+  protected function loadXml(string $xml_file, ?string $schema_file = null): array {
     $previous_errors = libxml_use_internal_errors(true);
     libxml_clear_errors();
 
@@ -267,6 +269,29 @@ class NanoPatcher {
 
       if (!$document->load($xml_file, LIBXML_NONET))
         throw new Exception('Unable to read XML.');
+
+      $root = $document->documentElement;
+      $namespace = 'http://www.w3.org/2001/XMLSchema-instance';
+
+      if ($root->getAttribute('xmlns:xsi') !== $namespace)
+        throw new Exception('The changeset root must declare xmlns:xsi="' . $namespace . '".');
+
+      $schema_location = $root->getAttribute('xsi:noNamespaceSchemaLocation');
+
+      if (trim($schema_location) === '')
+        throw new Exception('The changeset root must declare a non-empty xsi:noNamespaceSchemaLocation.');
+
+      if ($schema_file === null) {
+        $schema_file = str_replace('/', DIRECTORY_SEPARATOR, $schema_location);
+
+        if (!$this->isAbsolutePath($schema_file))
+          $schema_file = dirname($xml_file) . DIRECTORY_SEPARATOR . $schema_file;
+      }
+
+      $this->schema_file = $schema_file;
+
+      if (!is_file($this->schema_file))
+        throw new Exception('Schema file was not found: ' . $this->schema_file);
 
       if (!@$document->schemaValidate($this->schema_file))
         throw new Exception('XML does not match NanoPatcher.xsd.');
@@ -299,7 +324,7 @@ class NanoPatcher {
     }
   }
 
-  protected function getExecutedXml(string $executed_file): array {
+  protected function getExecutedXml(string $executed_file, SimpleXMLElement $changeset_xml): array {
     if (!file_exists($this->executed_dir)) {
       if (!mkdir($this->executed_dir, 0777, true)) {
         return [ 'success' => false
@@ -311,6 +336,9 @@ class NanoPatcher {
 
     if (!file_exists($executed_file)) {
       $xml = new SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><changeset/>');
+      $namespace = $changeset_xml->getDocNamespaces()['xsi'];
+      $attributes = $changeset_xml->attributes($namespace);
+      $xml->addAttribute('xsi:noNamespaceSchemaLocation', (string)$attributes['noNamespaceSchemaLocation'], $namespace);
 
       try {
         $this->saveXml($executed_file, $xml);
@@ -322,7 +350,8 @@ class NanoPatcher {
       }
     }
 
-    $loaded = $this->loadXml($executed_file);
+    // History uses the schema resolved from its source changeset.
+    $loaded = $this->loadXml($executed_file, $this->schema_file);
 
     if (!$loaded['success']) {
       return [ 'success' => false
@@ -452,14 +481,6 @@ class NanoPatcher {
   }
 
   protected function saveXml(string $xml_file, SimpleXMLElement $xml): void {
-    $namespace = 'http://www.w3.org/2001/XMLSchema-instance';
-    $attributes = $xml->attributes($namespace);
-
-    if (isset($attributes['noNamespaceSchemaLocation']))
-      $attributes['noNamespaceSchemaLocation'] = '../NanoPatcher.xsd';
-    else
-      $xml->addAttribute('xsi:noNamespaceSchemaLocation', '../NanoPatcher.xsd', $namespace);
-
     $contents = $xml->asXML();
 
     if ($contents === false)

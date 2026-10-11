@@ -51,9 +51,9 @@ This allows migration files to contain multiple CREATE, ALTER, INSERT, COMMENT, 
 
 Numbered changesets use filenames such as `application_changeset1.xml` and `application_changeset2.xml`. Files inside each changeset run in their listed order.
 
-The repository includes `NanoPatcher.xsd` in its root, next to `NanoPatcher.php`. With the default constructor, this root is also the migration base directory, so the supplied schema is already in the required location.
+The repository includes `NanoPatcher.xsd` in its root, next to `NanoPatcher.php`. Each changeset selects its schema through the root element's `xsi:noNamespaceSchemaLocation` attribute.
 
-If you configure another migration base directory, place a copy of `NanoPatcher.xsd` there, alongside `changeset`, `executed`, `sql`, and `php`. With the NanoMVC wrapper, this is the application's `database` directory. The schema must exist before running migrations; NanoPatcher does not create or copy it. A missing schema returns `SCHEMA_NOT_FOUND` before connecting to the database.
+Relative schema paths such as `schemas/NanoPatcher.xsd`, `./schemas/NanoPatcher.xsd`, and `../NanoPatcher.xsd` resolve from the directory containing the particular source changeset, not from the migration base directory or the process working directory. Absolute filesystem paths are used directly, including POSIX paths, Windows drive paths, and UNC paths. The schema must already exist; NanoPatcher does not create or copy it.
 
 Both XML example files, `changeset/example_changeset.xml` and `executed/example_changeset.xml`, reference the root schema using `xsi:noNamespaceSchemaLocation="../NanoPatcher.xsd"`. Use the same declaration in your changesets and execution history:
 
@@ -65,15 +65,17 @@ Both XML example files, `changeset/example_changeset.xml` and `executed/example_
 </changeset>
 ```
 
-The schema location in XML helps editors find the schema. NanoPatcher also validates both XML documents explicitly in PHP before running any file from the current changeset, including documents without a schema location attribute.
+Both `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"` and a non-empty `xsi:noNamespaceSchemaLocation` are required on the changeset and execution history roots. NanoPatcher resolves the schema from the source changeset and explicitly validates both documents against it before running any file from that changeset. Missing declarations, an incorrect namespace, a missing schema file, or failed validation produce `CHANGESET_XML_INVALID` for the source changeset or `EXECUTED_XML_INVALID` for existing history.
 
-The constructor initializes the protected `$schema_file` property to `$this->base_dir . DIRECTORY_SEPARATOR . 'NanoPatcher.xsd'`. Both the schema presence check and XML validation use this property. If a subclass provides its own constructor, it must call the parent constructor or initialize `$schema_file` alongside the migration directory properties.
+The constructor configures migration directories. The protected `$schema_file` property is assigned when loading a source changeset, using that changeset's schema location. Different changesets can reference different schemas. There is no default or fallback schema location.
 
 The schema defines a composite key on `type` and `url`. Duplicate keys are rejected within each XML document. The same `url` with different types is allowed because SQL and PHP files have different base directories. Execution history remains separate for each changeset.
 
 XSD alone checks duplicate `type` + `url` keys. PHP separately checks the permitted spelling of paths; it does not normalize paths or search for duplicate XML entries.
 
 ## File Paths
+
+The following restrictions apply to script `url` attributes. Schema locations use the separate rules described above, including support for `./` and absolute paths.
 
 The `url` attribute contains a relative filesystem path:
 
@@ -102,6 +104,8 @@ History stores the accepted relative `url` unchanged. Only the filesystem path u
 ## Execution Tracking
 
 For every changeset NanoPatcher creates a corresponding file inside the `executed` directory.
+
+When creating history, NanoPatcher copies the source root's `xmlns:xsi` and `xsi:noNamespaceSchemaLocation` declarations with their values unchanged. In particular, it does not replace or recalculate the schema location. Existing history must also contain both declarations. Saving XML preserves these values.
 
 Example:
 
@@ -146,7 +150,7 @@ After successful execution, NanoPatcher updates the existing history entry's `at
 
 If execution or history saving fails, `force` remains in the source changeset. If saving the changed changeset fails, the runner reports an error; the successful execution is already recorded in history, and the on-disk `force` attribute remains until it can be removed. Changeset files and their containing directory must be writable when forced execution is requested.
 
-XML updates use a temporary file in the destination directory followed by rename, preserving existing file permissions. Newly written history and forced changesets reference `../NanoPatcher.xsd`, since both directories are immediately below the migration base directory.
+XML updates use a temporary file in the destination directory followed by rename, preserving existing file permissions and schema declarations.
 
 Forced execution keeps the same script semantics as normal execution. It does not add database transactions or undo SQL/PHP changes.
 
