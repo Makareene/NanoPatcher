@@ -11,6 +11,7 @@
 class NanoPatcher {
 
   protected string $base_dir;
+  protected string $schema_file;
   protected string $changeset_dir;
   protected string $executed_dir;
   protected string $sql_dir;
@@ -20,6 +21,7 @@ class NanoPatcher {
   public function __construct(?string $base_dir = null) {
     $base_dir = $base_dir ?: __DIR__;
     $this->base_dir      = rtrim(realpath($base_dir) ?: $base_dir, DIRECTORY_SEPARATOR);
+    $this->schema_file   = $this->base_dir . DIRECTORY_SEPARATOR . 'NanoPatcher.xsd';
     $this->changeset_dir = $this->base_dir . DIRECTORY_SEPARATOR . 'changeset';
     $this->executed_dir  = $this->base_dir . DIRECTORY_SEPARATOR . 'executed';
     $this->sql_dir       = $this->base_dir . DIRECTORY_SEPARATOR . 'sql';
@@ -27,11 +29,9 @@ class NanoPatcher {
   }
 
   public function run(bool $show_skipped = false): array {
-    $schema_file = $this->base_dir . DIRECTORY_SEPARATOR . 'NanoPatcher.xsd';
-
-    if (!is_file($schema_file)) {
+    if (!is_file($this->schema_file)) {
       return [ 'code' => 'SCHEMA_NOT_FOUND'
-              ,'description' => "Schema file was not found: {$schema_file}"
+              ,'description' => "Schema file was not found: {$this->schema_file}"
               ,'changesets' => []
              ];
     }
@@ -202,7 +202,7 @@ class NanoPatcher {
       }
 
       if ($force) {
-        unset($file['force']);
+        $this->removeForce($file);
 
         try {
           $this->saveXml($changeset_file, $xml);
@@ -220,6 +220,20 @@ class NanoPatcher {
     }
 
     return $res;
+  }
+
+  protected function setForce(SimpleXMLElement $file): void {
+    if (in_array(trim((string)$file['force']), ['true', '1'], true))
+      return;
+
+    $file['force'] = 'true';
+  }
+
+  protected function removeForce(SimpleXMLElement $file): void {
+    if (!isset($file['force']))
+      return;
+
+    unset($file['force']);
   }
 
   protected function validateFileUrl(string $url): void {
@@ -254,7 +268,7 @@ class NanoPatcher {
       if (!$document->load($xml_file, LIBXML_NONET))
         throw new Exception('Unable to read XML.');
 
-      if (!@$document->schemaValidate($this->base_dir . DIRECTORY_SEPARATOR . 'NanoPatcher.xsd'))
+      if (!@$document->schemaValidate($this->schema_file))
         throw new Exception('XML does not match NanoPatcher.xsd.');
 
       $xml = simplexml_import_dom($document);

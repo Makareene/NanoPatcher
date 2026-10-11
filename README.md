@@ -65,7 +65,9 @@ Both XML example files, `changeset/example_changeset.xml` and `executed/example_
 </changeset>
 ```
 
-The schema location in XML helps editors find the schema. NanoPatcher also validates both XML documents explicitly in PHP before running any file from the current changeset, including documents without a schema location attribute. Validation always uses `NanoPatcher.xsd` from the configured migration base directory.
+The schema location in XML helps editors find the schema. NanoPatcher also validates both XML documents explicitly in PHP before running any file from the current changeset, including documents without a schema location attribute.
+
+The constructor initializes the protected `$schema_file` property to `$this->base_dir . DIRECTORY_SEPARATOR . 'NanoPatcher.xsd'`. Both the schema presence check and XML validation use this property. If a subclass provides its own constructor, it must call the parent constructor or initialize `$schema_file` alongside the migration directory properties.
 
 The schema defines a composite key on `type` and `url`. Duplicate keys are rejected within each XML document. The same `url` with different types is allowed because SQL and PHP files have different base directories. Execution history remains separate for each changeset.
 
@@ -147,6 +149,27 @@ If execution or history saving fails, `force` remains in the source changeset. I
 XML updates use a temporary file in the destination directory followed by rename, preserving existing file permissions. Newly written history and forced changesets reference `../NanoPatcher.xsd`, since both directories are immediately below the migration base directory.
 
 Forced execution keeps the same script semantics as normal execution. It does not add database transactions or undo SQL/PHP changes.
+
+### Managing Force in Subclasses
+
+Two protected methods operate on an existing XML `<file>` element:
+
+- `setForce(SimpleXMLElement $file): void` sets `force="true"`. If the value is already `true` or `1`, it returns without changing the element.
+- `removeForce(SimpleXMLElement $file): void` removes the `force` attribute. If the attribute is already absent, it returns without changing the element.
+
+Both methods change the XML object in memory. Save the changeset separately with `saveXml()` when persistence is needed. For example, inside a subclass:
+
+```php
+$this->setForce($xml->file[0]);
+$this->saveXml($changeset_file, $xml);
+```
+
+To remove the attribute:
+
+```php
+$this->removeForce($xml->file[0]);
+$this->saveXml($changeset_file, $xml);
+```
 
 ## Showing Skipped Files
 
